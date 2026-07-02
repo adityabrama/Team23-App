@@ -1,0 +1,23 @@
+# ================================================
+#  .gitignore untuk Team23 App
+# ================================================
+
+# --- Cache Python (tidak perlu di repo) ---
+__pycache__/
+*.pyc
+
+# --- Folder hasil dekripsi (isi berubah-ubah) ---
+diterima/
+
+# --- File paket terenkripsi hasil demo ---
+*.team23
+
+# --- File berisi data SENSITIF (JANGAN diupload) ---
+# PDF daftar nama/username/password -> data pribadi, jangan publik
+*.pdf
+LMS ITTS daftar_nama_username_password.pdf
+
+# --- Catatan ---
+# Folder kunci/ SENGAJA TIDAK diabaikan, supaya teman yang
+# 'git clone' tetap dapat kunci demo dan server-client bisa jalan.
+# Ini hanya kunci buangan untuk presentasi, bukan kunci asli.
