@@ -1,0 +1,121 @@
+"""
+================================================================
+ transport_umum.py — Fungsi bersama untuk TRANSPORT TCP Team23
+================================================================
+ Berisi:
+  - Protokol pembingkaian pesan (message framing) di atas TCP
+  - Helper generate kunci demo
+  - Import fungsi kripto dari Team23App.py
+
+ KENAPA PERLU FRAMING?
+ TCP itu "stream" (aliran byte tanpa batas). Kalau kita kirim
+ paket 1300 byte, penerima bisa menerimanya terpotong
+ (mis. 500 + 800) atau tergabung dengan pesan berikutnya.
+ Solusi standar: kirim dulu 4 byte panjang pesan, lalu isinya.
+ Penerima baca 4 byte -> tahu harus baca berapa byte berikutnya.
+ (Referensi: Python "Socket Programming HOWTO" — pola
+  length-prefixed message.)
+================================================================
+"""
+
+import socket, struct, importlib.util, json, base64
+from pathlib import Path
+
+# ---- import fungsi kripto dari Team23App.py (tanpa menjalankan GUI) ----
+_DIR = Path(__file__).parent
+_spec = importlib.util.spec_from_file_location("Team23App", _DIR / "Team23App.py")
+kripto = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(kripto)   # aman: GUI hanya jalan lewat jalankan_gui()
+
+# ---- konfigurasi demo ----
+HOST_DEFAULT = "127.0.0.1"   # DIPAKAI CLIENT sbg alamat tujuan server.
+                             # 1 laptop: biarkan "127.0.0.1".
+                             # Antar-laptop (WiFi): di laptop CLIENT ganti ke IP server,
+                             # contoh HOST_DEFAULT = "192.168.1.90"
+HOST_BIND    = "0.0.0.0"     # DIPAKAI SERVER: dengar di semua jaringan (localhost + WiFi).
+                             # Tidak perlu diubah.
+PORT_SERVER  = 5023          # port server penerima
+PORT_PROXY   = 5024          # port penyadap (man-in-the-middle)
+PWD_DEMO     = "team23demo"  # password private key untuk demo
+FOLDER_KUNCI = _DIR / "kunci"
+
+
+# ================= FRAMING PESAN DI ATAS TCP =================
+
+def kirim_pesan(sock, data):
+    """Kirim: [4 byte panjang][isi]. Menjamin pesan diterima utuh."""
+    sock.sendall(struct.pack(">I", len(data)) + data)
+
+def _terima_pasti(sock, n):
+    """Baca TEPAT n byte dari socket (loop sampai lengkap)."""
+    buf = b""
+    while len(buf) < n:
+        potongan = sock.recv(n - len(buf))
+        if not potongan:
+            raise ConnectionError("Koneksi terputus sebelum data lengkap")
+        buf += potongan
+    return buf
+
+def terima_pesan(sock):
+    """Terima satu pesan utuh sesuai framing kirim_pesan()."""
+    header = _terima_pasti(sock, 4)
+    panjang = struct.unpack(">I", header)[0]
+    return _terima_pasti(sock, panjang)
+
+
+# ================= SETUP KUNCI DEMO =================
+
+def pastikan_kunci_demo():
+    """Buat pasangan kunci Pengirim & Penerima kalau belum ada,
+    supaya demo langsung jalan tanpa setup manual."""
+    FOLDER_KUNCI.mkdir(exist_ok=True)
+    dibuat = []
+    for nama in ["Pengirim", "Penerima"]:
+        fp = FOLDER_KUNCI / (nama + "_private.pem")
+        fq = FOLDER_KUNCI / (nama + "_public.pem")
+        if not fp.exists() or not fq.exists():
+            priv, pub = kripto.buat_kunci_rsa()
+            kripto.simpan_kunci_privat(priv, str(fp), PWD_DEMO)
+            kripto.simpan_kunci_publik(pub, str(fq))
+            dibuat.append(nama)
+    return dibuat, FOLDER_KUNCI
+
+
+# ================= DEMO PENYADAPAN =================
+
+def ambil_ciphertext_isi(paket_bytes):
+    """Ambil BAGIAN ISI FILE yang terenkripsi dari paket, sebagai byte
+    acak mentah. Dipakai demo penyadapan agar terlihat benar-benar acak
+    (bukan sekadar nama field JSON yang memang tidak rahasia)."""
+    try:
+        p = json.loads(paket_bytes)
+        token = base64.b64decode(p["data"])          # token Fernet
+        return base64.urlsafe_b64decode(token)        # -> byte acak mentah
+    except Exception:
+        return paket_bytes
+
+
+def hexdump(data, baris_maks=8):
+    """Tampilkan sebagian data sebagai hex + ASCII (untuk membuktikan
+    yang lewat kabel hanyalah ciphertext acak, bukan teks asli)."""
+    keluaran = []
+    for i in range(0, min(len(data), baris_maks * 16), 16):
+        blok = data[i:i + 16]
+        hexs = " ".join("{:02x}".format(b) for b in blok)
+        teks = "".join(chr(b) if 32 <= b < 127 else "." for b in blok)
+        keluaran.append("  {:04x}  {:<48}  {}".format(i, hexs, teks))
+    if len(data) > baris_maks * 16:
+        keluaran.append("  ... ({} byte total)".format(len(data)))
+    return "\n".join(keluaran)
+
+
+def lan_ip():
+    """Deteksi IP LAN (WiFi) komputer ini, untuk ditampilkan ke presenter."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80)); ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip

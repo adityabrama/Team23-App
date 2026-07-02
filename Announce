@@ -1,0 +1,18 @@
+"""
+================================================================
+ TEAM23 APP — Aplikasi Enkripsi & Dekripsi HYBRID
+================================================================
+ Simetris  : Fernet (AES-128-CBC + HMAC-SHA256)  -> enkripsi isi file
+ Asimetris : RSA-2048 (OAEP + PSS)               -> bungkus kunci & tanda tangan
+
+ 4 Prinsip Keamanan (sesuai materi Kriptografi Dasar):
+   1. Kerahasiaan   : isi file dienkripsi dengan Fernet (AES-128)
+   2. Integritas    : HMAC bawaan Fernet + pembanding hash SHA-256
+   3. Otentikasi    : tanda tangan digital RSA-PSS milik pengirim
+   4. Non-Repudiasi : tanda tangan hanya bisa dibuat oleh private key
+                      pengirim, sehingga pengirim tidak bisa menyangkal
+
+ Kunci disimpan dalam format PEM STANDAR (PKCS#8 / SubjectPublicKeyInfo)
+ sehingga bisa dibuka & diperiksa di software XCA / OpenSSL.
+================================================================
+"""
