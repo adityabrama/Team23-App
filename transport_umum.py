@@ -18,7 +18,7 @@
 ================================================================
 """
 
-import socket, struct, importlib.util, json, base64
+import socket, struct, importlib.util, json, base64, os
 from pathlib import Path
 
 # ---- import fungsi kripto dari Team23App.py (tanpa menjalankan GUI) ----
@@ -37,7 +37,27 @@ HOST_BIND    = "0.0.0.0"     # DIPAKAI SERVER: dengar di semua jaringan (localho
 PORT_SERVER  = 5023          # port server penerima
 PORT_PROXY   = 5024          # port penyadap (man-in-the-middle)
 PWD_DEMO     = "team23demo"  # password private key untuk demo
-FOLDER_KUNCI = _DIR / "kunci"
+FOLDER_KUNCI = Path(os.environ.get("TEAM23_KUNCI") or (_DIR / "kunci"))
+
+# --- Nama file berbasis PERAN (sama di kedua mesin, isi beda) ---
+F_PRIV_SAYA = "saya_private.pem"    # kunci privat milikku
+F_PUB_SAYA  = "saya_public.pem"     # kunci publik milikku (dibagikan)
+F_PUB_LAWAN = "lawan_public.pem"    # kunci publik milik lawan (hasil tukar)
+
+def path_kunci(nama):
+    return str(FOLDER_KUNCI / nama)
+
+def punya_identitas_sendiri():
+    return (FOLDER_KUNCI / F_PRIV_SAYA).exists() and (FOLDER_KUNCI / F_PUB_SAYA).exists()
+
+def kunci_saya_lawan():
+    """(private_saya, public_lawan) kalau sudah generate & tukar kunci sendiri;
+    kalau belum, kembalikan None (skrip pakai kunci demo Pengirim/Penerima)."""
+    p = FOLDER_KUNCI / F_PRIV_SAYA
+    q = FOLDER_KUNCI / F_PUB_LAWAN
+    if p.exists() and q.exists():
+        return str(p), str(q)
+    return None
 
 
 # ================= FRAMING PESAN DI ATAS TCP =================

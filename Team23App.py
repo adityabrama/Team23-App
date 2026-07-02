@@ -418,3 +418,4 @@ def jalankan_gui():
 
 if __name__ == "__main__":
     jalankan_gui()
+
