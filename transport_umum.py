@@ -139,3 +139,53 @@ def lan_ip():
     finally:
         s.close()
     return ip
+
+
+# ================= ENKRIPSI PESAN CHAT (in-memory) =================
+
+def _b64e(b): return base64.b64encode(b).decode()
+def _b64d(s): return base64.b64decode(s)
+
+def muat_pasangan_kunci(peran):
+    """Kembalikan (priv_saya_obj, pub_lawan_obj, mode).
+    peran = 'server' atau 'client' (menentukan kunci demo bila belum PKI)."""
+    sl = kunci_saya_lawan()
+    if sl:
+        priv = kripto.muat_kunci_privat(sl[0], PWD_DEMO)
+        pub  = kripto.muat_kunci_publik(sl[1])
+        return priv, pub, "PKI (saya_private + lawan_public)"
+    pastikan_kunci_demo()
+    if peran == "server":
+        priv = kripto.muat_kunci_privat(path_kunci("Penerima_private.pem"), PWD_DEMO)
+        pub  = kripto.muat_kunci_publik(path_kunci("Pengirim_public.pem"))
+    else:
+        priv = kripto.muat_kunci_privat(path_kunci("Pengirim_private.pem"), PWD_DEMO)
+        pub  = kripto.muat_kunci_publik(path_kunci("Penerima_public.pem"))
+    return priv, pub, "DEMO (kunci bawaan)"
+
+def enkripsi_pesan(teks, priv_saya, pub_lawan, nama):
+    """Enkripsi satu pesan teks -> paket JSON (bytes). Hybrid + tanda tangan."""
+    data = teks.encode("utf-8")
+    h = kripto.sha256_hex(data)
+    fk = kripto.Fernet.generate_key()
+    ct = kripto.Fernet(fk).encrypt(data)
+    esk = pub_lawan.encrypt(fk, kripto._oaep())
+    sig = priv_saya.sign((h + nama).encode(), kripto._pss(), kripto.hashes.SHA256())
+    paket = {"pengirim": nama, "sha256": h,
+             "kunci": _b64e(esk), "ttd": _b64e(sig), "data": _b64e(ct)}
+    return json.dumps(paket).encode()
+
+def dekripsi_pesan(paket_bytes, priv_saya, pub_lawan):
+    """Buka satu paket pesan -> (teks, nama_pengirim, tanda_tangan_valid)."""
+    p = json.loads(paket_bytes)
+    fk = priv_saya.decrypt(_b64d(p["kunci"]), kripto._oaep())
+    data = kripto.Fernet(fk).decrypt(_b64d(p["data"]))
+    ok = False
+    try:
+        pub_lawan.verify(_b64d(p["ttd"]),
+                         (p["sha256"] + p["pengirim"]).encode(),
+                         kripto._pss(), kripto.hashes.SHA256())
+        ok = True
+    except Exception:
+        pass
+    return data.decode("utf-8"), p["pengirim"], ok
