@@ -1,17 +1,20 @@
 """
 ================================================================
- chat_client.py — CHAT TERENKRIPSI (sisi CLIENT)
+ chat_client.py — CHAT TERENKRIPSI + KIRIM FILE (sisi CLIENT)
 ================================================================
- Sama seperti chat_server.py, tapi menghubungi server.
- Ketik pesan + Enter untuk kirim. Ketik /keluar untuk berhenti.
-
+ Perintah saat chat:
+   (ketik teks biasa)   -> kirim pesan
+   /kirim <namafile>    -> kirim FILE (tersimpan di diterima_chat/ lawan)
+   /keluar              -> berhenti
  Jalankan SETELAH chat_server.py hidup.
 ================================================================
 """
 import socket, threading
+from pathlib import Path
 import transport_umum as T
 
 NAMA = "CLIENT"
+FOLDER_MASUK = Path(__file__).parent / "diterima_chat"
 
 
 def penerima(sock, priv, pub):
@@ -21,12 +24,19 @@ def penerima(sock, priv, pub):
         except Exception:
             print("\n[i] Koneksi ditutup."); break
         try:
-            teks, dari, valid = T.dekripsi_pesan(paket, priv, pub)
-            tanda = "" if valid else "  (tanda tangan TIDAK valid!)"
-            print("\r{} > {}{}".format(dari, teks, tanda))
+            info = T.dekripsi_pesan(paket, priv, pub)
+            catatan = "" if info["valid"] else "  (tanda tangan TIDAK valid!)"
+            if info["jenis"] == "file":
+                FOLDER_MASUK.mkdir(exist_ok=True)
+                out = FOLDER_MASUK / info["nama_file"]
+                out.write_bytes(info["data"])
+                print("\r{} > [FILE diterima: {} ({} byte)] -> disimpan di diterima_chat/{}".format(
+                    info["pengirim"], info["nama_file"], len(info["data"]), catatan))
+            else:
+                print("\r{} > {}{}".format(info["pengirim"], info["data"].decode("utf-8"), catatan))
             print("{} > ".format(NAMA), end="", flush=True)
         except Exception as e:
-            print("\n[!] Gagal buka pesan: {}".format(e))
+            print("\n[!] Gagal buka paket: {}".format(e))
 
 
 def main():
@@ -35,7 +45,8 @@ def main():
     print("Menghubungi server {}:{} ...".format(T.HOST_DEFAULT, T.PORT_SERVER))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((T.HOST_DEFAULT, T.PORT_SERVER))
-        print("[+] Terhubung. Mulai chat! (ketik /keluar untuk stop)\n")
+        print("[+] Terhubung. Mulai chat!")
+        print("    (ketik teks=pesan | /kirim <file>=kirim file | /keluar=stop)\n")
         threading.Thread(target=penerima, args=(sock, priv, pub), daemon=True).start()
         while True:
             try:
@@ -46,7 +57,14 @@ def main():
                 break
             if not teks:
                 continue
-            paket = T.enkripsi_pesan(teks, priv, pub, NAMA)
+            if teks.startswith("/kirim "):
+                path = teks[7:].strip().strip('"').strip("'")
+                if not Path(path).exists():
+                    print("[!] File tidak ada: {}".format(path)); continue
+                paket = T.enkripsi_berkas(path, priv, pub, NAMA)
+                print("[i] Mengirim file {} ({} byte, terenkripsi)...".format(Path(path).name, Path(path).stat().st_size))
+            else:
+                paket = T.enkripsi_pesan(teks, priv, pub, NAMA)
             try:
                 T.kirim_pesan(sock, paket)
             except Exception:

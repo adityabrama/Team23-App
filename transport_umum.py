@@ -141,7 +141,7 @@ def lan_ip():
     return ip
 
 
-# ================= ENKRIPSI PESAN CHAT (in-memory) =================
+# ================= ENKRIPSI PESAN & FILE CHAT (in-memory) =================
 
 def _b64e(b): return base64.b64encode(b).decode()
 def _b64d(s): return base64.b64decode(s)
@@ -163,20 +163,29 @@ def muat_pasangan_kunci(peran):
         pub  = kripto.muat_kunci_publik(path_kunci("Penerima_public.pem"))
     return priv, pub, "DEMO (kunci bawaan)"
 
-def enkripsi_pesan(teks, priv_saya, pub_lawan, nama):
-    """Enkripsi satu pesan teks -> paket JSON (bytes). Hybrid + tanda tangan."""
-    data = teks.encode("utf-8")
-    h = kripto.sha256_hex(data)
+def _enkripsi_paket(data_bytes, jenis, nama_file, priv_saya, pub_lawan, nama):
+    """Bungkus data (pesan/file) jadi paket JSON: hybrid + tanda tangan."""
+    h = kripto.sha256_hex(data_bytes)
     fk = kripto.Fernet.generate_key()
-    ct = kripto.Fernet(fk).encrypt(data)
+    ct = kripto.Fernet(fk).encrypt(data_bytes)
     esk = pub_lawan.encrypt(fk, kripto._oaep())
     sig = priv_saya.sign((h + nama).encode(), kripto._pss(), kripto.hashes.SHA256())
-    paket = {"pengirim": nama, "sha256": h,
-             "kunci": _b64e(esk), "ttd": _b64e(sig), "data": _b64e(ct)}
+    paket = {"jenis": jenis, "nama_file": nama_file, "pengirim": nama,
+             "sha256": h, "kunci": _b64e(esk), "ttd": _b64e(sig), "data": _b64e(ct)}
     return json.dumps(paket).encode()
 
+def enkripsi_pesan(teks, priv_saya, pub_lawan, nama):
+    """Enkripsi satu PESAN teks -> paket JSON (bytes)."""
+    return _enkripsi_paket(teks.encode("utf-8"), "pesan", "", priv_saya, pub_lawan, nama)
+
+def enkripsi_berkas(path_file, priv_saya, pub_lawan, nama):
+    """Enkripsi satu FILE -> paket JSON (bytes)."""
+    from pathlib import Path as _P
+    data = _P(path_file).read_bytes()
+    return _enkripsi_paket(data, "file", _P(path_file).name, priv_saya, pub_lawan, nama)
+
 def dekripsi_pesan(paket_bytes, priv_saya, pub_lawan):
-    """Buka satu paket pesan -> (teks, nama_pengirim, tanda_tangan_valid)."""
+    """Buka paket -> dict {jenis, nama_file, data(bytes), pengirim, valid}."""
     p = json.loads(paket_bytes)
     fk = priv_saya.decrypt(_b64d(p["kunci"]), kripto._oaep())
     data = kripto.Fernet(fk).decrypt(_b64d(p["data"]))
@@ -188,4 +197,5 @@ def dekripsi_pesan(paket_bytes, priv_saya, pub_lawan):
         ok = True
     except Exception:
         pass
-    return data.decode("utf-8"), p["pengirim"], ok
+    return {"jenis": p.get("jenis", "pesan"), "nama_file": p.get("nama_file", ""),
+            "data": data, "pengirim": p["pengirim"], "valid": ok}

@@ -1,71 +1,58 @@
-# Transport TCP Team23 — Pengiriman Paket Terenkripsi
+# Team23 App — Transport & Chat Terenkripsi (TCP)
 
-Pengembangan dari aplikasi enkripsi/dekripsi hybrid: sekarang paket dikirim
-lewat **jaringan (TCP)** menggunakan transport buatan sendiri, lalu didekripsi
-di sisi penerima. Tujuannya membuktikan 2 hal:
+Pengembangan dari aplikasi enkripsi/dekripsi hybrid (`Team23App.py`) menjadi
+komunikasi lewat jaringan: **chat + kirim file terenkripsi** di atas TCP.
 
-1. **Integritas terjamin** — kalau paket diubah di tengah jalan, penerima
-   langsung mendeteksi dan menolaknya.
-2. **Aman saat di-intercept** — kalau lalu lintas disadap, isi rahasia tetap
-   tidak terbaca (hanya ciphertext acak).
-
-## File
+## Isi folder (file inti)
 
 | File | Peran |
 |---|---|
-| `Team23App.py` | Aplikasi GUI enkripsi/dekripsi hybrid (inti kripto dipakai ulang di sini) |
-| `transport_umum.py` | Fungsi bersama: framing pesan TCP, setup kunci, hexdump |
-| `server_penerima.py` | **Server/penerima**: menerima, dekripsi, verifikasi 4 prinsip |
-| `client_pengirim.py` | **Client/pengirim**: enkripsi file lalu kirim lewat TCP |
-| `penyadap.py` | **Penyadap (man-in-the-middle)**: mengintip / mengubah data untuk demo |
+| `Team23App.py` | Aplikasi GUI enkripsi/dekripsi hybrid (mesin kripto dipakai ulang) |
+| `transport_umum.py` | Fungsi bersama: framing TCP, kunci, enkripsi pesan/file |
+| `chat_server.py` | **Server chat**: menunggu client, kirim/terima pesan & file |
+| `chat_client.py` | **Client chat**: menghubungi server, kirim/terima pesan & file |
+| `buat_kunci.py` | Generate kunci sendiri (`saya_private.pem` + `saya_public.pem`) |
+| `tukar_kunci_server.py` / `tukar_kunci_client.py` | Tukar public key antar mesin |
 
-Kunci demo (`Pengirim`, `Penerima`) dibuat otomatis di folder `kunci/`
-dengan password `team23demo`.
+Semua koneksi memakai **TCP** (`socket.SOCK_STREAM`). Tiap pesan/file
+dienkripsi hybrid (Fernet + RSA-OAEP) dan ditandatangani (RSA-PSS).
 
-## Kenapa TCP + framing?
+## Alur demo (PKI — tiap mesin punya kunci sendiri)
 
-TCP adalah aliran byte (stream) yang **reliable** — dijamin sampai, urut, dan
-tidak korup di level transport (itulah kenapa TCP "tidak perlu memusingkan
-integritas" seperti UDP). Tapi TCP tidak tahu batas antar-pesan, jadi kita
-tambahkan **framing**: kirim 4 byte panjang dulu, baru isinya. Integritas
-**terhadap serangan/modifikasi jahat** tetap dijamin oleh kripto (HMAC Fernet +
-hash SHA-256 + tanda tangan RSA), bukan oleh TCP.
-
-## Cara demo (3 terminal)
-
-Buka 3 terminal di folder ini.
-
-**Skenario 1 — Kirim langsung (semua LULUS):**
+Di TIAP mesin (Windows & Linux) jalankan sekali:
 ```
-Terminal 1:  python server_penerima.py
-Terminal 2:  python client_pengirim.py
+python buat_kunci.py          (Windows)   |   python3 buat_kunci.py   (Linux)
 ```
 
-**Skenario 2 — Disadap tapi tetap aman (isi tak terbaca):**
+Tukar public key:
 ```
-Terminal 1:  python server_penerima.py
-Terminal 2:  python penyadap.py
-Terminal 3:  python client_pengirim.py pesan_rahasia.txt 5024
+Server:  python  tukar_kunci_server.py
+Client:  python3 tukar_kunci_client.py
 ```
-Angka `5024` = kirim lewat penyadap. Lihat di Terminal 2: yang tertangkap
-hanya byte acak, dan kata rahasia TIDAK ditemukan. Server tetap LULUS.
+Setelah ini tiap mesin punya `lawan_public.pem`.
 
-**Skenario 3 — Disadap DAN diubah (integritas mendeteksi serangan):**
+## Chat + kirim file
+
 ```
-Terminal 1:  python server_penerima.py
-Terminal 2:  python penyadap.py --tamper
-Terminal 3:  python client_pengirim.py pesan_rahasia.txt 5024
+Terminal 1 (server):  python  chat_server.py
+Terminal 2 (client):  python3 chat_client.py
 ```
-Penyadap mengubah 1 byte. Server LANGSUNG MENOLAK ("integritas gagal").
 
-## Jalan di 2 device dalam 1 WiFi
+Perintah saat chat:
+- ketik teks biasa  → kirim pesan
+- `/kirim <namafile>` → kirim file (tersimpan di `diterima_chat/` sisi lawan)
+- `/keluar` → berhenti
 
-1. Di komputer **penerima**, cari IP LAN-nya:
-   - Windows: `ipconfig` → lihat "IPv4 Address" (mis. `192.168.1.10`)
-2. Edit `transport_umum.py` baris `HOST_DEFAULT = "127.0.0.1"` menjadi IP itu,
-   di **kedua** komputer. Pastikan firewall mengizinkan port 5023.
-3. Jalankan `server_penerima.py` di penerima, `client_pengirim.py` di pengirim.
-4. Salin folder `kunci/` (public key lawan) agar pasangan kunci cocok.
+## Antar-mesin (WiFi / VM)
 
-> Catatan: `127.0.0.1` = localhost (satu komputer), cocok untuk latihan &
-> presentasi. IP `192.168.x.x` untuk antar-device dalam WiFi yang sama.
+Di sisi **client**, ubah `HOST_DEFAULT` di `transport_umum.py`:
+- VM VirtualBox (NAT) → server di Windows: `HOST_DEFAULT = "10.0.2.2"`
+- 2 laptop WiFi → `HOST_DEFAULT = "192.168.1.90"` (IP server, lihat saat server start)
+
+Server otomatis mendengar di semua jaringan (`0.0.0.0`) dan menampilkan IP-nya.
+Kalau muncul popup Windows Firewall saat pertama kali, klik **Allow access**.
+
+## Catatan
+
+Kalau belum `buat_kunci.py` + tukar kunci, chat tetap jalan memakai kunci demo
+bawaan (mode 1 laptop) — cocok untuk uji cepat di satu komputer.
