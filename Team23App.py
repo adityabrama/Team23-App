@@ -418,8 +418,8 @@ def jalankan_gui():
     import transport_umum as T
 
     hal = tk.Frame(konten, bg=WARNA_BG); halaman["chat"] = hal
-    chat = {"sock": None, "priv": None, "pub": None, "mode": None,
-            "antre": _q.Queue(), "jalan": False}
+    chat = {"conn": None, "listen": None, "priv": None, "pub": None, "mode": None,
+            "antre": _q.Queue(), "jalan": False, "server_on": False}
     FOLDER_MASUK = Path(__file__).parent / "diterima_chat"
 
     kc = kartu(hal, "Chat Terenkripsi mTLS (TLS 1.3 + tanda tangan)")
@@ -445,16 +445,15 @@ def jalankan_gui():
     lbl_status.pack(anchor="w", padx=14, pady=(0, 8))
 
     log_c = tk.Text(hal, height=11, font=("Consolas", 9), bg="#0e2233",
-                    fg="#cfe3f5", relief="flat", state="disabled",
-                    padx=10, pady=8, wrap="word")
+                    fg="#cfe3f5", relief="flat", state="disabled", padx=10, pady=8, wrap="word")
     log_c.pack(fill="both", expand=True, pady=(0, 6))
     def log_chat(msg):
         log_c.configure(state="normal"); log_c.insert("end", msg + "\n")
         log_c.see("end"); log_c.configure(state="disabled")
     for _b in ["Selamat datang di Chat mTLS Team 23.",
-               "1) Pilih peran Server/Client di atas, lalu klik 'Mulai / Sambungkan'.",
-               "2) Ketik pesan + Enter untuk mengirim, atau tombol File untuk kirim berkas.",
-               "3) File yang diterima otomatis masuk ke folder diterima_chat/.",
+               "1) Pilih peran Server/Client, lalu klik 'Mulai / Sambungkan'.",
+               "2) Ketik pesan + Enter, atau tombol File untuk kirim berkas.",
+               "3) File yang diterima masuk ke folder diterima_chat/.",
                "Transport diamankan TLS 1.3 (mTLS); tiap pesan juga ditandatangani.", ""]:
         log_chat(_b)
 
@@ -469,25 +468,27 @@ def jalankan_gui():
                 jenis, teks = chat["antre"].get_nowait()
                 if jenis == "status":
                     lbl_status.configure(text=teks)
+                elif jenis == "reset":
+                    btn_mulai.configure(state="normal"); btn_stop.configure(state="disabled")
                 else:
                     log_chat(teks)
         except _q.Empty:
             pass
         root.after(120, _pump)
 
-    def _terima_loop(sock):
+    def _terima_loop(conn):
+        """Baca pesan dari SATU koneksi sampai putus. (satu-satunya pembaca)"""
         while chat["jalan"]:
             try:
-                paket = T.terima_pesan(sock)
+                paket = T.terima_pesan(conn)
             except Exception:
-                chat["antre"].put(("log", "[i] Koneksi ditutup.")); break
+                break
             try:
                 info = T.dekripsi_pesan(paket, chat["priv"], chat["pub"])
                 catatan = "" if info["valid"] else "  (tanda tangan TIDAK valid!)"
                 if info["jenis"] == "file":
                     FOLDER_MASUK.mkdir(exist_ok=True)
-                    out = FOLDER_MASUK / info["nama_file"]
-                    out.write_bytes(info["data"])
+                    (FOLDER_MASUK / info["nama_file"]).write_bytes(info["data"])
                     chat["antre"].put(("log", "{} > [FILE: {} ({} B)] -> diterima_chat/{}".format(
                         info["pengirim"], info["nama_file"], len(info["data"]), catatan)))
                 else:
@@ -495,27 +496,53 @@ def jalankan_gui():
                         info["pengirim"], info["data"].decode("utf-8"), catatan)))
             except Exception as e:
                 chat["antre"].put(("log", "[!] Gagal buka paket: {}".format(e)))
-        chat["jalan"] = False
 
     def _server_thread():
         try:
             ctx = T.konteks_tls_server()
-            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-            s.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
-            s.bind((T.HOST_BIND, T.PORT_SERVER)); s.listen(1)
+            ls = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            ls.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+            ls.bind((T.HOST_BIND, T.PORT_SERVER)); ls.listen(1)
+            ls.settimeout(1.0)                 # supaya bisa cek server_on & Stop
+            chat["listen"] = ls
             chat["antre"].put(("status", "Status: SERVER menunggu di port {} (IP {}) - TLS mTLS".format(
                 T.PORT_SERVER, T.lan_ip())))
-            ss = ctx.wrap_socket(s, server_side=True)
-            conn, addr = ss.accept()
-            cn = dict(x[0] for x in conn.getpeercert()["subject"]).get("commonName", "?")
-            chat["sock"] = conn; chat["jalan"] = True
-            chat["antre"].put(("status", "Status: TERSAMBUNG dgn {} | client CN={} | {}".format(
-                addr[0], cn, conn.version())))
-            chat["antre"].put(("log", "[v] Client terhubung ({}). Chat aman via {}!".format(cn, conn.version())))
-            _terima_loop(conn)
+            while chat["server_on"]:
+                try:
+                    raw, addr = ls.accept()
+                except _sock.timeout:
+                    continue
+                except OSError:
+                    break
+                try:
+                    conn = ctx.wrap_socket(raw, server_side=True)
+                    cn = dict(x[0] for x in conn.getpeercert()["subject"]).get("commonName", "?")
+                except Exception as e:
+                    chat["antre"].put(("log", "[!] Koneksi masuk DITOLAK (sertifikat tak tepercaya)."))
+                    try: raw.close()
+                    except Exception: pass
+                    continue
+                chat["conn"] = conn; chat["jalan"] = True
+                chat["antre"].put(("status", "Status: TERSAMBUNG dgn {} | client CN={} | {}".format(
+                    addr[0], cn, conn.version())))
+                chat["antre"].put(("log", "[v] Client terhubung ({}) via {}. Silakan chat!".format(cn, conn.version())))
+                _terima_loop(conn)             # blok sampai client ini putus
+                chat["jalan"] = False
+                try: conn.close()
+                except Exception: pass
+                chat["conn"] = None
+                if chat["server_on"]:
+                    chat["antre"].put(("log", "[i] Client terputus. Menunggu koneksi berikutnya..."))
+                    chat["antre"].put(("status", "Status: SERVER menunggu di port {} ...".format(T.PORT_SERVER)))
         except Exception as e:
             chat["antre"].put(("log", "[!] Server error: {}".format(e)))
-            chat["antre"].put(("status", "Status: gagal / berhenti"))
+        finally:
+            try:
+                if chat["listen"]: chat["listen"].close()
+            except Exception: pass
+            chat["listen"] = None; chat["server_on"] = False; chat["jalan"] = False
+            chat["antre"].put(("status", "Status: server berhenti"))
+            chat["antre"].put(("reset", ""))
 
     def _client_thread(alamat, penjahat):
         try:
@@ -523,59 +550,74 @@ def jalankan_gui():
             raw = _sock.create_connection((alamat, T.PORT_SERVER), timeout=8)
             conn = ctx.wrap_socket(raw, server_hostname="localhost")
             cn = dict(x[0] for x in conn.getpeercert()["subject"]).get("commonName", "?")
-            chat["sock"] = conn; chat["jalan"] = True
+            chat["conn"] = conn; chat["jalan"] = True
             chat["antre"].put(("status", "Status: TERSAMBUNG ke server (CN={}) | {}".format(cn, conn.version())))
-            chat["antre"].put(("log", "[v] Terhubung ke server. Chat aman via {}!".format(conn.version())))
+            chat["antre"].put(("log", "[v] Terhubung ke server via {}. Silakan chat!".format(conn.version())))
             _terima_loop(conn)
         except Exception as e:
             tip = " (sertifikat penjahat memang DITOLAK - itu benar!)" if penjahat else ""
-            chat["antre"].put(("log", "[!] Gagal konek: {}{}".format(type(e).__name__, tip)))
-            chat["antre"].put(("status", "Status: ditolak / gagal"))
+            chat["antre"].put(("log", "[!] Gagal/terputus: {}{}".format(type(e).__name__, tip)))
+        finally:
+            chat["jalan"] = False
+            try:
+                if chat["conn"]: chat["conn"].close()
+            except Exception: pass
+            chat["conn"] = None
+            chat["antre"].put(("status", "Status: terputus"))
+            chat["antre"].put(("reset", ""))
 
     def aksi_mulai():
-        if chat["jalan"]:
-            messagebox.showinfo("Info", "Sesi chat sudah berjalan."); return
+        if chat["jalan"] or chat["server_on"]:
+            messagebox.showinfo("Info", "Sesi masih berjalan. Klik 'Stop' dulu."); return
         if not T.sert_ada():
-            log_chat("[i] Sertifikat belum ada, membuat otomatis...")
+            log_chat("[i] Membuat sertifikat mTLS otomatis...")
             try:
                 import buat_sertifikat; buat_sertifikat.main()
-                log_chat("[i] Sertifikat mTLS dibuat di folder sertifikat/.")
+                log_chat("[i] Sertifikat dibuat di folder sertifikat/.")
             except Exception as e:
                 messagebox.showerror("Error", "Gagal buat sertifikat: {}".format(e)); return
         peran = mode_var.get()
         chat["priv"], chat["pub"], km = T.muat_pasangan_kunci(peran)
         chat["mode"] = peran
         log_chat("[i] Mode kunci tanda tangan: {}".format(km))
+        btn_mulai.configure(state="disabled"); btn_stop.configure(state="normal")
         if peran == "server":
+            chat["server_on"] = True
             _thr.Thread(target=_server_thread, daemon=True).start()
         else:
             _thr.Thread(target=_client_thread,
                         args=(e_alamat.get().strip() or "127.0.0.1", penjahat_var.get()),
                         daemon=True).start()
 
+    def aksi_stop():
+        chat["server_on"] = False; chat["jalan"] = False
+        for k in ("conn", "listen"):
+            try:
+                if chat[k]: chat[k].close()
+            except Exception: pass
+            chat[k] = None
+        log_chat("[i] Sesi dihentikan.")
+        btn_mulai.configure(state="normal"); btn_stop.configure(state="disabled")
+
     def aksi_kirim_pesan(_=None):
         teks = e_pesan.get()
-        if not teks or not chat["sock"] or not chat["jalan"]: return
+        if not teks or not chat["conn"] or not chat["jalan"]: return
         try:
             nama = chat["mode"].upper()
-            paket = T.enkripsi_pesan(teks, chat["priv"], chat["pub"], nama)
-            T.kirim_pesan(chat["sock"], paket)
-            log_chat("{} (saya) > {}".format(nama, teks))
-            e_pesan.delete(0, "end")
+            T.kirim_pesan(chat["conn"], T.enkripsi_pesan(teks, chat["priv"], chat["pub"], nama))
+            log_chat("{} (saya) > {}".format(nama, teks)); e_pesan.delete(0, "end")
         except Exception as e:
             log_chat("[!] Gagal kirim: {}".format(e))
 
     def aksi_kirim_file():
-        if not chat["sock"] or not chat["jalan"]:
+        if not chat["conn"] or not chat["jalan"]:
             messagebox.showwarning("Peringatan", "Belum tersambung."); return
         p = filedialog.askopenfilename()
         if not p: return
         try:
             nama = chat["mode"].upper()
-            paket = T.enkripsi_berkas(p, chat["priv"], chat["pub"], nama)
-            T.kirim_pesan(chat["sock"], paket)
-            log_chat("{} (saya) > [FILE terkirim: {} ({} B)]".format(
-                nama, Path(p).name, Path(p).stat().st_size))
+            T.kirim_pesan(chat["conn"], T.enkripsi_berkas(p, chat["priv"], chat["pub"], nama))
+            log_chat("{} (saya) > [FILE terkirim: {} ({} B)]".format(nama, Path(p).name, Path(p).stat().st_size))
         except Exception as e:
             log_chat("[!] Gagal kirim file: {}".format(e))
 
@@ -584,8 +626,13 @@ def jalankan_gui():
               fg="white", relief="flat", font=FONT, cursor="hand2").pack(side="left", padx=(6, 0), ipadx=6)
     tk.Button(baris_kirim, text="File", command=aksi_kirim_file, bg="#5a6b7d",
               fg="white", relief="flat", font=FONT, cursor="hand2").pack(side="left", padx=(6, 0), ipadx=4)
-    tk.Button(kc, text="Mulai / Sambungkan", command=aksi_mulai, bg=WARNA_OK,
-              fg="white", relief="flat", font=FONT_TEBAL, cursor="hand2").pack(fill="x", padx=14, pady=(0, 10), ipady=6)
+    baris_tombol = tk.Frame(kc, bg=WARNA_KARTU); baris_tombol.pack(fill="x", padx=14, pady=(0, 10))
+    btn_mulai = tk.Button(baris_tombol, text="Mulai / Sambungkan", command=aksi_mulai, bg=WARNA_OK,
+              fg="white", relief="flat", font=FONT_TEBAL, cursor="hand2")
+    btn_mulai.pack(side="left", fill="x", expand=True, ipady=6)
+    btn_stop = tk.Button(baris_tombol, text="Stop", command=aksi_stop, bg=WARNA_GAGAL,
+              fg="white", relief="flat", font=FONT_TEBAL, cursor="hand2", state="disabled")
+    btn_stop.pack(side="left", padx=(8, 0), ipady=6, ipadx=10)
 
     root.after(200, _pump)
 
