@@ -1,67 +1,70 @@
-# Team23 App — Kriptografi Hybrid, Transport & Chat Terenkripsi
+# Team23 App — Kriptografi Hybrid + Transport mTLS + Chat Aman
 
-Aplikasi enkripsi/dekripsi **hybrid** (simetris + asimetris) yang memenuhi
-4 prinsip keamanan, dilengkapi **chat + kirim file terenkripsi** lewat jaringan (TCP).
+Aplikasi enkripsi/dekripsi **hybrid** (simetris + asimetris) yang memenuhi 4 prinsip
+keamanan, DITAMBAH **chat + kirim file** yang transportnya diamankan **TLS 1.3 (mTLS)**.
+Chat kini menyatu di dalam aplikasi (menu Chat), bisa jadi Server atau Client.
 
-## 4 Prinsip Keamanan
+## Lapisan Keamanan (2 lapis)
 
-| Prinsip | Mekanisme |
-|---|---|
-| Kerahasiaan | Isi dienkripsi **Fernet** (AES-128-CBC + HMAC-SHA256); kunci Fernet dibungkus **RSA-2048 OAEP** dengan public key penerima (hybrid) |
-| Integritas | HMAC bawaan Fernet + pembanding hash **SHA-256** |
-| Otentikasi | **Tanda tangan digital RSA-PSS** dengan private key pengirim |
-| Non-Repudiasi | Tanda tangan hanya bisa dibuat pemilik private key, jadi pengirim tak bisa menyangkal |
+| Lapisan | Mekanisme | Menjamin |
+|---|---|---|
+| Transport (kabel) | **TLS 1.3 mutual TLS** — server & client saling verifikasi sertifikat yang ditandatangani CA | Seluruh data di kabel teracak; hanya pihak bersertifikat sah yang boleh terhubung |
+| End-to-end (isi) | **Fernet (AES-128) + RSA-OAEP + tanda tangan RSA-PSS** | Kerahasiaan, Integritas, Otentikasi, Non-Repudiasi per pesan/file |
+
+Jadi meski ada yang menyadap kabel, yang terlihat hanya **TLS record terenkripsi** —
+nama file / isi JSON tidak lagi terbaca (berbeda dengan versi lama).
 
 ## Struktur File
 
 | File | Peran |
 |---|---|
-| `Team23App.py` | Aplikasi GUI enkripsi/dekripsi hybrid |
-| `transport_umum.py` | Fungsi bersama: framing TCP, kunci, enkripsi pesan/file |
-| `chat_server.py` / `chat_client.py` | Chat + kirim file terenkripsi (TCP) |
-| `buat_kunci.py` | Generate kunci sendiri (`saya_private.pem` + `saya_public.pem`) |
-| `tukar_kunci_server.py` / `tukar_kunci_client.py` | Tukar public key antar mesin |
+| `Team23App.py` | Aplikasi GUI: tab Buat Kunci, Pengirim, Penerima, dan **Chat (mTLS)** |
+| `transport_umum.py` | Fungsi bersama: framing TCP, kunci, enkripsi pesan/file, **konteks TLS/mTLS** |
+| `buat_sertifikat.py` | Membuat CA + sertifikat server/client (di-sign CA) + penjahat (palsu) |
+| `chat_server.py` / `chat_client.py` | Versi terminal dari chat mTLS (untuk demo 2 terminal / VM) |
+| `buat_kunci.py`, `tukar_kunci_*.py` | Kunci tanda tangan sendiri (PKI) + tukar public key |
+| `sertifikat/` | ca, server, client, penjahat (dibuat otomatis saat pertama chat) |
 
 ## Cara Pakai
 
-### 1. Aplikasi GUI (enkripsi/dekripsi file)
+### Aplikasi lengkap (GUI)
 ```
 pip install cryptography
 python Team23App.py
 ```
-Di Linux, GUI butuh: `sudo dnf install -y python3-tkinter` (Rocky) atau `sudo apt install -y python3-tk` (Ubuntu).
+Linux butuh tkinter: `sudo dnf install -y python3-tkinter` (Rocky) / `sudo apt install -y python3-tk` (Ubuntu).
 
-### 2. Chat + Kirim File (lewat TCP)
+Di tab **Chat (mTLS)**: pilih peran (Server/Client), klik **Mulai / Sambungkan**.
+Sertifikat mTLS dibuat otomatis kalau belum ada. Lalu ketik pesan, atau tombol **File**
+untuk kirim file. File masuk ke folder `diterima_chat/`.
 
-Tiap mesin generate kunci sendiri, lalu tukar public key:
+### Versi terminal (opsional, cocok untuk VM)
 ```
-python buat_kunci.py            # buat kunci sendiri
-# Server:  python tukar_kunci_server.py
-# Client:  python tukar_kunci_client.py
+Terminal 1 (server):  python chat_server.py
+Terminal 2 (client):  python chat_client.py
+# Uji tolak sertifikat palsu:
+                       python chat_client.py penjahat   -> DITOLAK server
 ```
-
-Mulai chat (2 terminal):
-```
-Terminal 1:  python chat_server.py
-Terminal 2:  python chat_client.py
-```
-
-Perintah saat chat:
-- ketik teks → kirim pesan
-- `/kirim <namafile>` → kirim file (tersimpan di `diterima_chat/` sisi lawan)
-- `/keluar` → berhenti
 
 ### Antar-mesin (WiFi / VirtualBox)
-Di sisi **client**, ubah `HOST_DEFAULT` di `transport_umum.py`:
-- VM VirtualBox (NAT) ke server Windows: `HOST_DEFAULT = "10.0.2.2"`
-- 2 laptop 1 WiFi: `HOST_DEFAULT = "<IP server>"` (mis. `192.168.1.90`)
+Di sisi **client**, isi alamat server (di GUI) atau ubah `HOST_DEFAULT` di `transport_umum.py`:
+- VM VirtualBox (NAT) ke server Windows: `10.0.2.2`
+- 2 laptop 1 WiFi: IP server (mis. `192.168.1.90`, ditampilkan saat server start)
 
-Server otomatis mendengar di semua jaringan dan menampilkan IP-nya saat start.
-Izinkan **Windows Firewall** saat pertama kali server dijalankan.
+Sertifikat (`sertifikat/`) harus SAMA di kedua mesin (di-sign CA yang sama), jadi salin
+folder `sertifikat/` ke mesin lain, atau clone repo yang sudah memuatnya.
+
+## Demo Keamanan (untuk presentasi)
+- **Transport terenkripsi**: penyadap kabel hanya melihat TLS record acak (bukan nama file).
+- **mTLS**: server & client saling menunjukkan sertifikat CA. TLS 1.3.
+- **Sertifikat penjahat ditolak**: centang "uji sertifikat PENJAHAT" (GUI) atau
+  `python chat_client.py penjahat` -> koneksi ditolak ("certificate verify failed").
 
 ## Catatan Teknis
-- Semua transport memakai **TCP** (`socket.SOCK_STREAM`) + framing (4 byte panjang + isi).
-- Kunci PEM standar (PKCS#8 / SubjectPublicKeyInfo) — bisa dibuka di **XCA** / OpenSSL.
-- Kalau belum `buat_kunci.py` + tukar kunci, chat memakai kunci demo bawaan (mode 1 laptop).
+- Semua transport **TCP** + framing (4 byte panjang + isi), dibungkus **TLS 1.3**.
+- Sertifikat & kunci PEM standar — bisa dibuka di XCA/OpenSSL.
+- `check_hostname` dimatikan agar bisa lintas-IP (VM/LAN); keamanan tetap dijaga karena
+  sertifikat wajib ditandatangani CA tepercaya.
+- Untuk kelas ini CA bersifat throwaway; di dunia nyata private key CA tidak dibagikan.
 
 > Team 23 — Kriptografi Dasar

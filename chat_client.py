@@ -1,15 +1,16 @@
 """
 ================================================================
- chat_client.py — CHAT TERENKRIPSI + KIRIM FILE (sisi CLIENT)
+ chat_client.py — CHAT mTLS (sisi CLIENT) versi terminal
 ================================================================
- Perintah saat chat:
-   (ketik teks biasa)   -> kirim pesan
-   /kirim <namafile>    -> kirim FILE (tersimpan di diterima_chat/ lawan)
-   /keluar              -> berhenti
+ Perintah: teks = pesan | /kirim <file> = kirim file | /keluar
  Jalankan SETELAH chat_server.py hidup.
+
+ Untuk MENGUJI penolakan sertifikat palsu, jalankan:
+     python chat_client.py penjahat
+ (client akan memakai penjahat.crt dan DITOLAK server).
 ================================================================
 """
-import socket, threading
+import socket, ssl, threading, sys
 from pathlib import Path
 import transport_umum as T
 
@@ -28,9 +29,8 @@ def penerima(sock, priv, pub):
             catatan = "" if info["valid"] else "  (tanda tangan TIDAK valid!)"
             if info["jenis"] == "file":
                 FOLDER_MASUK.mkdir(exist_ok=True)
-                out = FOLDER_MASUK / info["nama_file"]
-                out.write_bytes(info["data"])
-                print("\r{} > [FILE diterima: {} ({} byte)] -> disimpan di diterima_chat/{}".format(
+                (FOLDER_MASUK / info["nama_file"]).write_bytes(info["data"])
+                print("\r{} > [FILE: {} ({} B)] -> diterima_chat/{}".format(
                     info["pengirim"], info["nama_file"], len(info["data"]), catatan))
             else:
                 print("\r{} > {}{}".format(info["pengirim"], info["data"].decode("utf-8"), catatan))
@@ -40,33 +40,44 @@ def penerima(sock, priv, pub):
 
 
 def main():
+    penjahat = (len(sys.argv) > 1 and sys.argv[1].lower() == "penjahat")
+    if not T.sert_ada():
+        import buat_sertifikat; buat_sertifikat.main()
     priv, pub, mode = T.muat_pasangan_kunci("client")
-    print("=== CHAT CLIENT (mode kunci: {}) ===".format(mode))
+    ctx = T.konteks_tls_client(pakai_penjahat=penjahat)
+    print("=== CHAT CLIENT mTLS (kunci ttd: {}) ===".format(mode))
+    if penjahat: print("!! MODE PENJAHAT: memakai sertifikat palsu — seharusnya DITOLAK.")
     print("Menghubungi server {}:{} ...".format(T.HOST_DEFAULT, T.PORT_SERVER))
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.connect((T.HOST_DEFAULT, T.PORT_SERVER))
-        print("[+] Terhubung. Mulai chat!")
-        print("    (ketik teks=pesan | /kirim <file>=kirim file | /keluar=stop)\n")
-        threading.Thread(target=penerima, args=(sock, priv, pub), daemon=True).start()
+    try:
+        raw = socket.create_connection((T.HOST_DEFAULT, T.PORT_SERVER), timeout=8)
+        conn = ctx.wrap_socket(raw, server_hostname="localhost")
+        # paksa komunikasi supaya penolakan penjahat langsung terdeteksi
+        cn = dict(x[0] for x in conn.getpeercert()["subject"]).get("commonName", "?")
+    except ssl.SSLError as e:
+        print("[!] DITOLAK saat handshake:", str(e).split('] ')[-1][:60]); return
+    except Exception as e:
+        print("[!] Gagal konek:", type(e).__name__, str(e)[:60]); return
+    print("[v] Terhubung ke server (CN={}) via {}. Mulai chat!".format(cn, conn.version()))
+    print("    (teks=pesan | /kirim <file> | /keluar)\n")
+    with conn:
+        threading.Thread(target=penerima, args=(conn, priv, pub), daemon=True).start()
         while True:
             try:
                 teks = input("{} > ".format(NAMA))
             except (EOFError, KeyboardInterrupt):
                 break
-            if teks.strip() == "/keluar":
-                break
-            if not teks:
-                continue
+            if teks.strip() == "/keluar": break
+            if not teks: continue
             if teks.startswith("/kirim "):
                 path = teks[7:].strip().strip('"').strip("'")
                 if not Path(path).exists():
                     print("[!] File tidak ada: {}".format(path)); continue
                 paket = T.enkripsi_berkas(path, priv, pub, NAMA)
-                print("[i] Mengirim file {} ({} byte, terenkripsi)...".format(Path(path).name, Path(path).stat().st_size))
+                print("[i] Kirim file {} (terenkripsi)...".format(Path(path).name))
             else:
                 paket = T.enkripsi_pesan(teks, priv, pub, NAMA)
             try:
-                T.kirim_pesan(sock, paket)
+                T.kirim_pesan(conn, paket)
             except Exception:
                 print("[i] Koneksi terputus."); break
     print("\n[i] Chat selesai.")

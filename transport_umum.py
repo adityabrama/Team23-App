@@ -199,3 +199,53 @@ def dekripsi_pesan(paket_bytes, priv_saya, pub_lawan):
         pass
     return {"jenis": p.get("jenis", "pesan"), "nama_file": p.get("nama_file", ""),
             "data": data, "pengirim": p["pengirim"], "valid": ok}
+
+
+# ================= LAPISAN TLS / mTLS (transport terenkripsi) =================
+# Membungkus socket TCP dengan TLS 1.3 supaya SELURUH data di kabel teracak
+# (termasuk paket JSON kita). mTLS = server & client saling menunjukkan
+# sertifikat yang ditandatangani CA; sertifikat asing (penjahat) ditolak.
+
+import ssl as _ssl
+
+FOLDER_SERT = _DIR / "sertifikat"
+
+def sert_ada():
+    """Cek apakah sertifikat mTLS sudah dibuat."""
+    perlu = ["ca.crt", "server.crt", "server.key", "client.crt", "client.key"]
+    return all((FOLDER_SERT / f).exists() for f in perlu)
+
+def _p(nama):
+    return str(FOLDER_SERT / nama)
+
+def konteks_tls_server():
+    """Konteks TLS untuk SERVER (mTLS): tunjukkan server.crt, WAJIBKAN &
+    verifikasi sertifikat client terhadap CA."""
+    ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=_p("server.crt"), keyfile=_p("server.key"))
+    ctx.verify_mode = _ssl.CERT_REQUIRED          # client WAJIB bersertifikat
+    ctx.load_verify_locations(cafile=_p("ca.crt"))# hanya percaya yg di-sign CA
+    try:
+        ctx.minimum_version = _ssl.TLSVersion.TLSv1_2
+    except Exception:
+        pass
+    return ctx
+
+def konteks_tls_client(pakai_penjahat=False):
+    """Konteks TLS untuk CLIENT (mTLS): verifikasi server terhadap CA, dan
+    tunjukkan client.crt (atau penjahat.crt untuk demo penolakan).
+    check_hostname dimatikan supaya bisa jalan lintas-IP (VM/LAN); keamanan
+    tetap dijaga karena sertifikat wajib ditandatangani CA tepercaya."""
+    ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_REQUIRED
+    ctx.load_verify_locations(cafile=_p("ca.crt"))
+    if pakai_penjahat:
+        ctx.load_cert_chain(certfile=_p("penjahat.crt"), keyfile=_p("penjahat.key"))
+    else:
+        ctx.load_cert_chain(certfile=_p("client.crt"), keyfile=_p("client.key"))
+    try:
+        ctx.minimum_version = _ssl.TLSVersion.TLSv1_2
+    except Exception:
+        pass
+    return ctx
