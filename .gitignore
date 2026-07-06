@@ -1,23 +1,22 @@
 # ================================================
-#  .gitignore untuk Team23 App
+#  .gitignore — Team23 App
 # ================================================
 
-# --- Cache Python (tidak perlu di repo) ---
+# Cache Python
 __pycache__/
 *.pyc
 
-# --- Folder hasil dekripsi (isi berubah-ubah) ---
+# Folder hasil dekripsi / file yang diterima (berubah-ubah)
 diterima/
+diterima_chat/
 
-# --- File paket terenkripsi hasil demo ---
+# Paket terenkripsi hasil demo (jangan diupload)
 *.team23
 
-# --- File berisi data SENSITIF (JANGAN diupload) ---
-# PDF daftar nama/username/password -> data pribadi, jangan publik
+# File pribadi/sensitif
 *.pdf
-LMS ITTS daftar_nama_username_password.pdf
 
-# --- Catatan ---
-# Folder kunci/ SENGAJA TIDAK diabaikan, supaya teman yang
-# 'git clone' tetap dapat kunci demo dan server-client bisa jalan.
-# Ini hanya kunci buangan untuk presentasi, bukan kunci asli.
+# Catatan:
+# Folder kunci/ dan sertifikat/ SENGAJA ikut di-commit supaya teman yang
+# 'git clone' langsung bisa menjalankan chat mTLS tanpa setup manual.
+# Ini hanya kunci & CA "buangan" untuk demo kelas — bukan kunci asli.

@@ -1,74 +1,81 @@
 # Team23 App — Kriptografi Hybrid + Transport mTLS + Chat Aman
 
 Aplikasi enkripsi/dekripsi **hybrid** (simetris + asimetris) yang memenuhi 4 prinsip
-keamanan, DITAMBAH **chat + kirim file** yang transportnya diamankan **TLS 1.3 (mTLS)**.
-Chat kini menyatu di dalam aplikasi (menu Chat), bisa jadi Server atau Client.
+keamanan, dilengkapi **chat + kirim file** yang transportnya diamankan **TLS 1.3 (mTLS)**.
+Semuanya menyatu dalam satu aplikasi GUI (`Team23App.py`).
 
-## Lapisan Keamanan (2 lapis)
+## 4 Prinsip Keamanan
 
-| Lapisan | Mekanisme | Menjamin |
-|---|---|---|
-| Transport (kabel) | **TLS 1.3 mutual TLS** — server & client saling verifikasi sertifikat yang ditandatangani CA | Seluruh data di kabel teracak; hanya pihak bersertifikat sah yang boleh terhubung |
-| End-to-end (isi) | **Fernet (AES-128) + RSA-OAEP + tanda tangan RSA-PSS** | Kerahasiaan, Integritas, Otentikasi, Non-Repudiasi per pesan/file |
+| Prinsip | Mekanisme |
+|---|---|
+| Kerahasiaan | Isi + metadata dienkripsi **Fernet** (AES-128); kunci Fernet dibungkus **RSA-2048 OAEP** |
+| Integritas | HMAC bawaan Fernet + pembanding hash **SHA-256** |
+| Otentikasi | **Tanda tangan digital RSA-PSS** dengan private key pengirim |
+| Non-Repudiasi | Tanda tangan hanya bisa dibuat pemilik private key |
 
-Jadi meski ada yang menyadap kabel, yang terlihat hanya **TLS record terenkripsi** —
-nama file / isi JSON tidak lagi terbaca (berbeda dengan versi lama).
+## Dua Lapis Perlindungan
+
+1. **Transport (kabel)** — **TLS 1.3 mutual TLS**: server & client saling verifikasi sertifikat
+   yang ditandatangani CA. Penyadap kabel hanya melihat TLS record acak.
+2. **End-to-end (isi)** — paket **BINER opaque**: seluruh isi + metadata (pengirim, nama file,
+   hash) terenkripsi. Paket hanya berupa 4 byte magic (`T23`) lalu byte acak.
 
 ## Struktur File
 
-| File | Peran |
+| File / Folder | Peran |
 |---|---|
-| `Team23App.py` | Aplikasi GUI: tab Buat Kunci, Pengirim, Penerima, dan **Chat (mTLS)** |
-| `transport_umum.py` | Fungsi bersama: framing TCP, kunci, enkripsi pesan/file, **konteks TLS/mTLS** |
+| `Team23App.py` | Aplikasi GUI utama: tab Buat Kunci, Pengirim, Penerima, Chat (mTLS) |
+| `transport_umum.py` | Fungsi bersama: framing TCP, konteks TLS/mTLS, enkripsi pesan/file, Sesi ber-lock |
 | `buat_sertifikat.py` | Membuat CA + sertifikat server/client (di-sign CA) + penjahat (palsu) |
-| `chat_server.py` / `chat_client.py` | Versi terminal dari chat mTLS (untuk demo 2 terminal / VM) |
-| `buat_kunci.py`, `tukar_kunci_*.py` | Kunci tanda tangan sendiri (PKI) + tukar public key |
-| `sertifikat/` | ca, server, client, penjahat (dibuat otomatis saat pertama chat) |
+| `chat_server.py` / `chat_client.py` | Versi terminal dari chat mTLS (untuk VM/headless) |
+| `buat_kunci.py` | Generate kunci tanda tangan sendiri (`saya_private/public.pem`) — mode PKI |
+| `tukar_kunci_server.py` / `tukar_kunci_client.py` | Tukar public key antar mesin (PKI) |
+| `kunci/` | Kunci tanda tangan demo (ikut di-commit agar clone langsung jalan) |
+| `sertifikat/` | CA + sertifikat mTLS demo (ikut di-commit) |
 
 ## Cara Pakai
 
-### Aplikasi lengkap (GUI)
+### 1. Install
 ```
 pip install cryptography
-python Team23App.py
 ```
-Linux butuh tkinter: `sudo dnf install -y python3-tkinter` (Rocky) / `sudo apt install -y python3-tk` (Ubuntu).
+Linux (untuk GUI): `sudo dnf install -y python3-tkinter` (Rocky) / `sudo apt install -y python3-tk` (Ubuntu).
 
-Di tab **Chat (mTLS)**: pilih peran (Server/Client), klik **Mulai / Sambungkan**.
-Sertifikat mTLS dibuat otomatis kalau belum ada. Lalu ketik pesan, atau tombol **File**
-untuk kirim file. File masuk ke folder `diterima_chat/`.
-
-### Versi terminal (opsional, cocok untuk VM)
+### 2. Aplikasi GUI
 ```
-Terminal 1 (server):  python chat_server.py
-Terminal 2 (client):  python chat_client.py
-# Uji tolak sertifikat palsu:
-                       python chat_client.py penjahat   -> DITOLAK server
+python Team23App.py     (Windows)
+python3 Team23App.py    (Linux)
+```
+- **Buat Kunci**: buat pasangan kunci RSA untuk fitur enkripsi file manual.
+- **Pengirim**: pilih file + private key kamu + public key penerima → hasil paket `.team23` (biner acak).
+- **Penerima**: buka `.team23` → verifikasi 4 prinsip → simpan file asli.
+- **Chat (mTLS)**: pilih Server/Client → **Mulai / Sambungkan** → ketik pesan atau tombol **File**.
+  File yang diterima masuk ke folder `diterima_chat/`. Ada tombol **Stop** untuk memutus.
+
+### 3. Chat versi terminal (opsional, cocok untuk VM)
+```
+Server:  python chat_server.py
+Client:  python chat_client.py
+Uji tolak sertifikat palsu:  python chat_client.py penjahat   -> DITOLAK
 ```
 
 ### Antar-mesin (WiFi / VirtualBox)
-Di sisi **client**, isi alamat server (di GUI) atau ubah `HOST_DEFAULT` di `transport_umum.py`:
-- VM VirtualBox (NAT) ke server Windows: `10.0.2.2`
+Di sisi **client**, isi "Alamat server" (GUI) atau ubah `HOST_DEFAULT` di `transport_umum.py`:
+- VM VirtualBox (NAT) → server Windows: `10.0.2.2`
 - 2 laptop 1 WiFi: IP server (mis. `192.168.1.90`, ditampilkan saat server start)
 
-Sertifikat (`sertifikat/`) harus SAMA di kedua mesin (di-sign CA yang sama), jadi salin
-folder `sertifikat/` ke mesin lain, atau clone repo yang sudah memuatnya.
+Kedua mesin harus punya folder `sertifikat/` & `kunci/` yang SAMA — cukup `git clone` repo ini.
 
 ## Demo Keamanan (untuk presentasi)
-- **Transport terenkripsi**: penyadap kabel hanya melihat TLS record acak (bukan nama file).
-- **mTLS**: server & client saling menunjukkan sertifikat CA. TLS 1.3.
-- **Sertifikat penjahat ditolak**: centang "uji sertifikat PENJAHAT" (GUI) atau
-  `python chat_client.py penjahat` -> koneksi ditolak ("certificate verify failed").
+- **Transport terenkripsi**: penyadap kabel hanya melihat TLS record acak.
+- **File terenkripsi**: buka `.team23` di editor teks → byte acak semua (Notepad bahkan menolak, itu normal).
+- **mTLS**: server & client saling verifikasi sertifikat CA (TLS 1.3).
+- **Sertifikat penjahat ditolak**: centang "uji sertifikat PENJAHAT" (GUI) atau `python chat_client.py penjahat`.
+- **Integritas**: ubah 1 byte paket → dekripsi menolak ("integritas gagal").
 
 ## Catatan Teknis
-- **Paket BINER opaque**: seluruh metadata (pengirim, penerima, nama_file, waktu, hash)
-  IKUT dienkripsi bersama isi, dan wadahnya biner mentah (bukan JSON/base64). File `.team23`
-  maupun paket chat hanya berupa 4 byte magic (`T23`) lalu byte acak — dibuka di editor teks
-  hanya muncul gibberish. Overhead ~3% (jauh lebih kecil dari base64 yang +33%).
-- Semua transport **TCP** + framing (4 byte panjang + isi), dibungkus **TLS 1.3**.
-- Sertifikat & kunci PEM standar — bisa dibuka di XCA/OpenSSL.
-- `check_hostname` dimatikan agar bisa lintas-IP (VM/LAN); keamanan tetap dijaga karena
-  sertifikat wajib ditandatangani CA tepercaya.
-- Untuk kelas ini CA bersifat throwaway; di dunia nyata private key CA tidak dibagikan.
+- Chat memakai kelas `Sesi` (lock + `select`) agar TLS aman dibaca+ditulis dua thread (chat dua arah lancar).
+- Kunci & sertifikat format PEM standar — bisa dibuka di **XCA** / OpenSSL.
+- CA di repo ini bersifat throwaway (khusus demo kelas); di dunia nyata private key CA tidak dibagikan.
 
 > Team 23 — Kriptografi Dasar

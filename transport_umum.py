@@ -35,7 +35,6 @@ HOST_DEFAULT = "127.0.0.1"   # DIPAKAI CLIENT sbg alamat tujuan server.
 HOST_BIND    = "0.0.0.0"     # DIPAKAI SERVER: dengar di semua jaringan (localhost + WiFi).
                              # Tidak perlu diubah.
 PORT_SERVER  = 5023          # port server penerima
-PORT_PROXY   = 5024          # port penyadap (man-in-the-middle)
 PWD_DEMO     = "team23demo"  # password private key untuk demo
 FOLDER_KUNCI = Path(os.environ.get("TEAM23_KUNCI") or (_DIR / "kunci"))
 
@@ -99,34 +98,6 @@ def pastikan_kunci_demo():
             kripto.simpan_kunci_publik(pub, str(fq))
             dibuat.append(nama)
     return dibuat, FOLDER_KUNCI
-
-
-# ================= DEMO PENYADAPAN =================
-
-def ambil_ciphertext_isi(paket_bytes):
-    """Ambil BAGIAN ISI FILE yang terenkripsi dari paket, sebagai byte
-    acak mentah. Dipakai demo penyadapan agar terlihat benar-benar acak
-    (bukan sekadar nama field JSON yang memang tidak rahasia)."""
-    try:
-        p = json.loads(paket_bytes)
-        token = base64.b64decode(p["data"])          # token Fernet
-        return base64.urlsafe_b64decode(token)        # -> byte acak mentah
-    except Exception:
-        return paket_bytes
-
-
-def hexdump(data, baris_maks=8):
-    """Tampilkan sebagian data sebagai hex + ASCII (untuk membuktikan
-    yang lewat kabel hanyalah ciphertext acak, bukan teks asli)."""
-    keluaran = []
-    for i in range(0, min(len(data), baris_maks * 16), 16):
-        blok = data[i:i + 16]
-        hexs = " ".join("{:02x}".format(b) for b in blok)
-        teks = "".join(chr(b) if 32 <= b < 127 else "." for b in blok)
-        keluaran.append("  {:04x}  {:<48}  {}".format(i, hexs, teks))
-    if len(data) > baris_maks * 16:
-        keluaran.append("  ... ({} byte total)".format(len(data)))
-    return "\n".join(keluaran)
 
 
 def lan_ip():
