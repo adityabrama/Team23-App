@@ -164,14 +164,17 @@ def muat_pasangan_kunci(peran):
     return priv, pub, "DEMO (kunci bawaan)"
 
 def _enkripsi_paket(data_bytes, jenis, nama_file, priv_saya, pub_lawan, nama):
-    """Bungkus data (pesan/file) jadi paket JSON: hybrid + tanda tangan."""
+    """Bungkus data jadi paket OPAQUE: metadata (jenis, nama_file, pengirim)
+    IKUT dienkripsi. Outer hanya berisi field acak v/k/s/d."""
     h = kripto.sha256_hex(data_bytes)
+    meta = {"jenis": jenis, "nama_file": nama_file, "pengirim": nama, "sha256": h}
+    meta_json = json.dumps(meta).encode()
+    inner = len(meta_json).to_bytes(4, "big") + meta_json + data_bytes
     fk = kripto.Fernet.generate_key()
-    ct = kripto.Fernet(fk).encrypt(data_bytes)
+    blob = kripto.Fernet(fk).encrypt(inner)
     esk = pub_lawan.encrypt(fk, kripto._oaep())
     sig = priv_saya.sign((h + nama).encode(), kripto._pss(), kripto.hashes.SHA256())
-    paket = {"jenis": jenis, "nama_file": nama_file, "pengirim": nama,
-             "sha256": h, "kunci": _b64e(esk), "ttd": _b64e(sig), "data": _b64e(ct)}
+    paket = {"v": "T23M", "k": _b64e(esk), "s": _b64e(sig), "d": _b64e(blob)}
     return json.dumps(paket).encode()
 
 def enkripsi_pesan(teks, priv_saya, pub_lawan, nama):
@@ -185,21 +188,21 @@ def enkripsi_berkas(path_file, priv_saya, pub_lawan, nama):
     return _enkripsi_paket(data, "file", _P(path_file).name, priv_saya, pub_lawan, nama)
 
 def dekripsi_pesan(paket_bytes, priv_saya, pub_lawan):
-    """Buka paket -> dict {jenis, nama_file, data(bytes), pengirim, valid}."""
+    """Buka paket OPAQUE -> dict {jenis, nama_file, data, pengirim, valid}."""
     p = json.loads(paket_bytes)
-    fk = priv_saya.decrypt(_b64d(p["kunci"]), kripto._oaep())
-    data = kripto.Fernet(fk).decrypt(_b64d(p["data"]))
+    fk = priv_saya.decrypt(_b64d(p["k"]), kripto._oaep())
+    inner = kripto.Fernet(fk).decrypt(_b64d(p["d"]))
+    mlen = int.from_bytes(inner[:4], "big")
+    meta = json.loads(inner[4:4 + mlen]); data = inner[4 + mlen:]
     ok = False
     try:
-        pub_lawan.verify(_b64d(p["ttd"]),
-                         (p["sha256"] + p["pengirim"]).encode(),
+        pub_lawan.verify(_b64d(p["s"]), (meta["sha256"] + meta["pengirim"]).encode(),
                          kripto._pss(), kripto.hashes.SHA256())
         ok = True
     except Exception:
         pass
-    return {"jenis": p.get("jenis", "pesan"), "nama_file": p.get("nama_file", ""),
-            "data": data, "pengirim": p["pengirim"], "valid": ok}
-
+    return {"jenis": meta.get("jenis", "pesan"), "nama_file": meta.get("nama_file", ""),
+            "data": data, "pengirim": meta["pengirim"], "valid": ok}
 
 # ================= LAPISAN TLS / mTLS (transport terenkripsi) =================
 # Membungkus socket TCP dengan TLS 1.3 supaya SELURUH data di kabel teracak
