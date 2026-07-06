@@ -1,6 +1,6 @@
 
 
-import json, base64, hashlib, datetime
+import json, base64, hashlib, datetime, struct
 from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes, serialization
@@ -19,6 +19,24 @@ def _pss():
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+# --- Format BINER: magic 4 byte + [4B len + data] untuk tiap bagian ---
+MAGIC_FILE = b"T23\x02"   # penanda paket file .team23 (biner)
+
+def _pack_biner(magic, bagian):
+    out = bytearray(magic)
+    for b in bagian:
+        out += struct.pack(">I", len(b)) + b
+    return bytes(out)
+
+def _unpack_biner(raw, magic, jumlah=3):
+    if raw[:len(magic)] != magic:
+        raise ValueError("Bukan paket Team23 yang valid!")
+    p = len(magic); hasil = []
+    for _ in range(jumlah):
+        n = struct.unpack(">I", raw[p:p+4])[0]; p += 4
+        hasil.append(raw[p:p+n]); p += n
+    return hasil
 
 def buat_kunci_rsa():
     """Membuat sepasang kunci RSA-2048."""
@@ -48,11 +66,9 @@ def muat_kunci_publik(path):
 
 def enkripsi_hybrid(path_file, path_priv_pengirim, pwd_pengirim,
                     path_pub_penerima, nama_pengirim, nama_penerima):
-    """Enkripsi hybrid + tanda tangan. Paket OPAQUE: metadata (pengirim,
-    nama_file, dll) IKUT dienkripsi, jadi paket sepenuhnya acak."""
+    """Enkripsi hybrid + tanda tangan -> paket BINER opaque (byte acak semua)."""
     data = Path(path_file).read_bytes()
     hash_asli = sha256_hex(data)
-    # metadata disatukan dengan isi, lalu SEMUA dienkripsi Fernet
     meta = {"pengirim": nama_pengirim, "penerima": nama_penerima,
             "nama_file": Path(path_file).name, "ukuran": len(data),
             "waktu": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
@@ -61,28 +77,22 @@ def enkripsi_hybrid(path_file, path_priv_pengirim, pwd_pengirim,
     inner = len(meta_json).to_bytes(4, "big") + meta_json + data
 
     kunci_fernet = Fernet.generate_key()
-    blob = Fernet(kunci_fernet).encrypt(inner)                 # metadata + isi terenkripsi
-    kunci_terbungkus = muat_kunci_publik(path_pub_penerima).encrypt(kunci_fernet, _oaep())
-    priv = muat_kunci_privat(path_priv_pengirim, pwd_pengirim)
-    tanda_tangan = priv.sign((hash_asli + nama_pengirim).encode(), _pss(), hashes.SHA256())
-
-    # outer HANYA berisi field acak: v (penanda format), k, s, d
-    paket = {"v": FORMAT_PAKET,
-             "k": base64.b64encode(kunci_terbungkus).decode(),
-             "s": base64.b64encode(tanda_tangan).decode(),
-             "d": base64.b64encode(blob).decode()}
-    return json.dumps(paket, indent=1).encode(), hash_asli
+    token = Fernet(kunci_fernet).encrypt(inner)
+    blob = base64.urlsafe_b64decode(token)                     # -> byte MENTAH (bukan base64)
+    k = muat_kunci_publik(path_pub_penerima).encrypt(kunci_fernet, _oaep())
+    s = muat_kunci_privat(path_priv_pengirim, pwd_pengirim).sign(
+            (hash_asli + nama_pengirim).encode(), _pss(), hashes.SHA256())
+    return _pack_biner(MAGIC_FILE, [k, s, blob]), hash_asli
 
 def dekripsi_hybrid(path_paket, path_priv_penerima, pwd_penerima,
                     path_pub_pengirim):
-    """Dekripsi + verifikasi 4 prinsip. Mengembalikan dict hasil."""
-    paket = json.loads(Path(path_paket).read_bytes())
-    if paket.get("v") != FORMAT_PAKET:
-        raise ValueError("Bukan paket Team23 (opaque) yang valid!")
-    priv = muat_kunci_privat(path_priv_penerima, pwd_penerima)
-    kunci_fernet = priv.decrypt(base64.b64decode(paket["k"]), _oaep())
+    """Dekripsi + verifikasi 4 prinsip dari paket BINER."""
+    raw = Path(path_paket).read_bytes()
+    k, s, blob = _unpack_biner(raw, MAGIC_FILE)
+    kunci_fernet = muat_kunci_privat(path_priv_penerima, pwd_penerima).decrypt(k, _oaep())
     try:
-        inner = Fernet(kunci_fernet).decrypt(base64.b64decode(paket["d"]))
+        token = base64.urlsafe_b64encode(blob)                 # rakit ulang token Fernet
+        inner = Fernet(kunci_fernet).decrypt(token)
         ok_kerahasiaan = True
     except InvalidToken:
         raise ValueError("Token Fernet rusak / dimodifikasi (integritas gagal)!")
@@ -93,8 +103,7 @@ def dekripsi_hybrid(path_paket, path_priv_penerima, pwd_penerima,
     ok_ttd = False
     try:
         muat_kunci_publik(path_pub_pengirim).verify(
-            base64.b64decode(paket["s"]),
-            (meta["sha256"] + meta["pengirim"]).encode(), _pss(), hashes.SHA256())
+            s, (meta["sha256"] + meta["pengirim"]).encode(), _pss(), hashes.SHA256())
         ok_ttd = True
     except Exception:
         pass

@@ -163,19 +163,19 @@ def muat_pasangan_kunci(peran):
         pub  = kripto.muat_kunci_publik(path_kunci("Penerima_public.pem"))
     return priv, pub, "DEMO (kunci bawaan)"
 
+MAGIC_CHAT = b"T23\x01"   # penanda paket chat (biner)
+
 def _enkripsi_paket(data_bytes, jenis, nama_file, priv_saya, pub_lawan, nama):
-    """Bungkus data jadi paket OPAQUE: metadata (jenis, nama_file, pengirim)
-    IKUT dienkripsi. Outer hanya berisi field acak v/k/s/d."""
+    """Bungkus data jadi paket BINER opaque (byte acak semua)."""
     h = kripto.sha256_hex(data_bytes)
     meta = {"jenis": jenis, "nama_file": nama_file, "pengirim": nama, "sha256": h}
     meta_json = json.dumps(meta).encode()
     inner = len(meta_json).to_bytes(4, "big") + meta_json + data_bytes
     fk = kripto.Fernet.generate_key()
-    blob = kripto.Fernet(fk).encrypt(inner)
-    esk = pub_lawan.encrypt(fk, kripto._oaep())
+    blob = base64.urlsafe_b64decode(kripto.Fernet(fk).encrypt(inner))   # byte mentah
+    k = pub_lawan.encrypt(fk, kripto._oaep())
     sig = priv_saya.sign((h + nama).encode(), kripto._pss(), kripto.hashes.SHA256())
-    paket = {"v": "T23M", "k": _b64e(esk), "s": _b64e(sig), "d": _b64e(blob)}
-    return json.dumps(paket).encode()
+    return kripto._pack_biner(MAGIC_CHAT, [k, sig, blob])
 
 def enkripsi_pesan(teks, priv_saya, pub_lawan, nama):
     """Enkripsi satu PESAN teks -> paket JSON (bytes)."""
@@ -188,15 +188,15 @@ def enkripsi_berkas(path_file, priv_saya, pub_lawan, nama):
     return _enkripsi_paket(data, "file", _P(path_file).name, priv_saya, pub_lawan, nama)
 
 def dekripsi_pesan(paket_bytes, priv_saya, pub_lawan):
-    """Buka paket OPAQUE -> dict {jenis, nama_file, data, pengirim, valid}."""
-    p = json.loads(paket_bytes)
-    fk = priv_saya.decrypt(_b64d(p["k"]), kripto._oaep())
-    inner = kripto.Fernet(fk).decrypt(_b64d(p["d"]))
+    """Buka paket BINER -> dict {jenis, nama_file, data, pengirim, valid}."""
+    k, sig, blob = kripto._unpack_biner(paket_bytes, MAGIC_CHAT)
+    fk = priv_saya.decrypt(k, kripto._oaep())
+    inner = kripto.Fernet(fk).decrypt(base64.urlsafe_b64encode(blob))
     mlen = int.from_bytes(inner[:4], "big")
     meta = json.loads(inner[4:4 + mlen]); data = inner[4 + mlen:]
     ok = False
     try:
-        pub_lawan.verify(_b64d(p["s"]), (meta["sha256"] + meta["pengirim"]).encode(),
+        pub_lawan.verify(sig, (meta["sha256"] + meta["pengirim"]).encode(),
                          kripto._pss(), kripto.hashes.SHA256())
         ok = True
     except Exception:

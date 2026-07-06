@@ -61,9 +61,10 @@ folder `sertifikat/` ke mesin lain, atau clone repo yang sudah memuatnya.
   `python chat_client.py penjahat` -> koneksi ditolak ("certificate verify failed").
 
 ## Catatan Teknis
-- **Paket OPAQUE**: seluruh metadata (pengirim, penerima, nama_file, waktu, hash) IKUT
-  dienkripsi bersama isi. Paket `.team23` maupun paket chat hanya berisi field acak
-  `v` (penanda format), `k`, `s`, `d` — tidak ada lagi metadata yang terbaca.
+- **Paket BINER opaque**: seluruh metadata (pengirim, penerima, nama_file, waktu, hash)
+  IKUT dienkripsi bersama isi, dan wadahnya biner mentah (bukan JSON/base64). File `.team23`
+  maupun paket chat hanya berupa 4 byte magic (`T23`) lalu byte acak — dibuka di editor teks
+  hanya muncul gibberish. Overhead ~3% (jauh lebih kecil dari base64 yang +33%).
 - Semua transport **TCP** + framing (4 byte panjang + isi), dibungkus **TLS 1.3**.
 - Sertifikat & kunci PEM standar — bisa dibuka di XCA/OpenSSL.
 - `check_hostname` dimatikan agar bisa lintas-IP (VM/LAN); keamanan tetap dijaga karena
