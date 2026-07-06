@@ -265,10 +265,18 @@ class Sesi:
                 if not r:
                     continue                # belum ada data, coba lagi
             with self._lock:
+                # recv NON-BLOCKING supaya lock TAK PERNAH ditahan saat menunggu
+                # (mis. yang datang cuma TLS session-ticket, bukan data aplikasi).
+                self.sock.setblocking(False)
                 try:
                     d = self.sock.recv(65536)
-                except _ssl.SSLWantReadError:
-                    continue
+                except (_ssl.SSLWantReadError, BlockingIOError):
+                    d = None
+                finally:
+                    try: self.sock.setblocking(True)
+                    except Exception: pass
+            if d is None:
+                continue
             if d == b"":
                 raise ConnectionError("Koneksi ditutup")
             self._buf += d
