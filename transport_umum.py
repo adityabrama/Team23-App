@@ -250,3 +250,55 @@ def konteks_tls_client(pakai_penjahat=False):
         pass
     return ctx
 
+
+
+# ================= SESI CHAT AMAN (serialisasi baca/tulis TLS) =================
+# SSL socket TIDAK aman dibaca & ditulis dua thread bersamaan. "Sesi"
+# menserialisasi operasi dengan lock. Pembaca memakai select() untuk MENUNGGU
+# data TANPA memegang lock dan TANPA timeout pada recv (timeout saat recv bisa
+# merusak state TLS). Jadi thread pengirim tidak pernah terkunci lama, dan
+# tidak ada korupsi TLS akibat timeout.
+import threading as _threading
+import select as _select
+
+class Sesi:
+    def __init__(self, sock):
+        self.sock = sock
+        self._lock = _threading.Lock()
+        self._buf = b""
+        try: sock.setblocking(True)     # blocking; kesiapan dicek pakai select
+        except Exception: pass
+
+    def kirim(self, data):
+        pesan = struct.pack(">I", len(data)) + data
+        with self._lock:
+            self.sock.sendall(pesan)
+
+    def terima(self):
+        """Ambil satu pesan berbingkai utuh. Raise bila koneksi ditutup."""
+        while True:
+            if len(self._buf) >= 4:
+                n = struct.unpack(">I", self._buf[:4])[0]
+                if len(self._buf) >= 4 + n:
+                    m = self._buf[4:4+n]; self._buf = self._buf[4+n:]; return m
+            # tunggu data TANPA memegang lock (biar pengirim tak terkunci)
+            try:
+                pending = self.sock.pending() > 0
+            except Exception:
+                pending = False
+            if not pending:
+                r, _, _ = _select.select([self.sock], [], [], 0.3)
+                if not r:
+                    continue                # belum ada data, coba lagi
+            with self._lock:
+                try:
+                    d = self.sock.recv(65536)
+                except _ssl.SSLWantReadError:
+                    continue
+            if d == b"":
+                raise ConnectionError("Koneksi ditutup")
+            self._buf += d
+
+    def tutup(self):
+        try: self.sock.close()
+        except Exception: pass

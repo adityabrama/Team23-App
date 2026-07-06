@@ -18,10 +18,10 @@ NAMA = "SERVER"
 FOLDER_MASUK = Path(__file__).parent / "diterima_chat"
 
 
-def penerima(conn, priv, pub):
+def penerima(sesi, priv, pub):
     while True:
         try:
-            paket = T.terima_pesan(conn)
+            paket = sesi.terima()
         except Exception:
             print("\n[i] Koneksi ditutup."); break
         try:
@@ -58,7 +58,8 @@ def main():
     print("[v] Client {} (CN={}) terhubung via {}. Mulai chat!".format(addr[0], cn, conn.version()))
     print("    (teks=pesan | /kirim <file> | /keluar)\n")
     with conn:
-        threading.Thread(target=penerima, args=(conn, priv, pub), daemon=True).start()
+        sesi = T.Sesi(conn)
+        threading.Thread(target=penerima, args=(sesi, priv, pub), daemon=True).start()
         while True:
             try:
                 teks = input("{} > ".format(NAMA))
@@ -75,7 +76,7 @@ def main():
             else:
                 paket = T.enkripsi_pesan(teks, priv, pub, NAMA)
             try:
-                T.kirim_pesan(conn, paket)
+                sesi.kirim(paket)
             except Exception:
                 print("[i] Koneksi terputus."); break
     print("\n[i] Chat selesai.")
